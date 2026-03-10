@@ -1,0 +1,32 @@
+# Environnements virtuels
+venv/
+env/
+.venv/
+
+# Fichiers Python compilés
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Logs
+*.log
+
+# Données générées
+data/*.csv
+*.xlsx
+*.json
+
+# Fichiers temporaires
+.tmp
+.DS_Store
+
+# Configuration IDE
+.vscode/
+.idea/
+
+# Selenium WebDriver
+chromedriver
+geckodriver
+
+# Configuration personnalisée
+config.py
