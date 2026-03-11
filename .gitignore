@@ -30,3 +30,6 @@ geckodriver
 
 # Configuration personnalisée
 config.py
+
+# Environment variables
+.env

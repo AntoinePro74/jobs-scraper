@@ -2,6 +2,21 @@
 Paramètres de configuration pour le scraper HelloWork.
 """
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Configuration de la base de données PostgreSQL
+DB_CONFIG = {
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": int(os.getenv("DB_PORT", 5432)),
+    "dbname": os.getenv("DB_NAME", "hellowork"),
+    "user": os.getenv("DB_USER", "postgres"),
+    "password": os.getenv("DB_PASSWORD", ""),
+}
+
 # Configuration du scraping
 SCRAPE_DELAY = 2  # Secondes entre chaque requête
 MAX_RETRIES = 3   # Nombre maximum de tentatives en cas d'erreur

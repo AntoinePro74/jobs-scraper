@@ -4,3 +4,5 @@ selenium>=4.15.0
 pandas>=2.1.0
 lxml>=4.9.0
 webdriver-manager>=4.0.0
+psycopg2-binary>=2.9.0
+python-dotenv>=1.0.0
