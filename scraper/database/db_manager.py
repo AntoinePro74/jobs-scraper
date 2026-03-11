@@ -69,16 +69,17 @@ class DatabaseManager:
             self.cursor.execute(create_table_query)
             self.conn.commit()
             logger.info("Ensured job_offers table exists")
-
-            # Migration: add new_offer column if it doesn't exist
-            self._add_column_if_not_exists('new_offer', 'BOOLEAN DEFAULT TRUE')
         except psycopg2.Error as e:
             self.conn.rollback()
             logger.error(f"Failed to create table: {e}")
             raise
 
     def _add_column_if_not_exists(self, column_name: str, column_type: str):
-        """Add a column to job_offers table if it doesn't already exist."""
+        """
+        Add a column to job_offers table if it doesn't already exist.
+
+        Useful for future migrations (applied, last_seen_at, is_active, etc.)
+        """
         try:
             check_query = """
             SELECT EXISTS (
