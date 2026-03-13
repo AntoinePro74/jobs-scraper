@@ -106,30 +106,78 @@ def _parse_ai_response(response_text: str) -> Optional[Dict[str, any]]:
     try:
         # Extraction du score global avec regex permissive
         # Gère : **Score global**, espaces optionnels, score entier ou décimal, astérisques
-        score_pattern = r'\*{0,2}[Ss]core\s+[Gg]lobal\s*\*{0,2}\s*:\s*\*{0,2}\s*(\d+(?:[.,]\d+)?)\s*\*{0,2}\s*/\s*10'
+        score_pattern = r'\*{0,2}[Ss]core\s+[Gg]lobal(?:\s+[Pp]ondéré)?\s*\*{0,2}\s*:\s*\*{0,2}\s*(\d+(?:[.,]\d+)?)\s*\*{0,2}\s*/\s*10'
         score_match = re.search(score_pattern, response_text)
 
         if not score_match:
-            logger.warning("Impossible d'extraire le score global de la réponse")
-            return None
-
-        ai_score = float(score_match.group(1))
+            # Fallback 1 : chercher le dernier score non entre parenthèses (type X/10)
+            fallback_matches = re.findall(
+                r'(?<!\()\b(\d+(?:[.,]\d+)?)\s*/\s*10\b(?!\))',
+                response_text
+            )
+            if fallback_matches:
+                score_str = fallback_matches[-1].replace(',', '.')
+                ai_score = float(score_str)
+                logger.warning(f"Score extrait via fallback regex : {ai_score}")
+            else:
+                # Fallback 2 : calculer la somme des notes pondérées si le détail est présent
+                weighted_matches = re.findall(
+                    r'\d+%\s*[×x]\s*\d+(?:[.,]\d+)?\s*=\s*(\d+(?:[.,]\d+)?)',
+                    response_text
+                )
+                if weighted_matches and len(weighted_matches) >= 3:
+                    try:
+                        total = sum(float(v.replace(',', '.')) for v in weighted_matches)
+                        if 0 < total <= 10:
+                            ai_score = round(total, 2)
+                            logger.warning(f"Score calculé via somme pondérée : {ai_score}")
+                        else:
+                            logger.warning("Impossible d'extraire le score global de la réponse")
+                            logger.warning(f"Réponse brute (fin, 600 chars) : {response_text[-600:]}")
+                            return None
+                    except Exception as e:
+                        logger.warning(f"Erreur lors du calcul des pondérations : {e}")
+                        logger.warning(f"Réponse brute (fin, 600 chars) : {response_text[-600:]}")
+                        return None
+                else:
+                    logger.warning("Impossible d'extraire le score global de la réponse")
+                    logger.warning(f"Réponse brute (fin, 600 chars) : {response_text[-600:]}")
+                    return None
+        else:
+            score_str = score_match.group(1).replace(',', '.')
+            ai_score = float(score_str)
 
         # Extraction de la recommandation (ligne commençant par un emoji)
         # Pattern permissif : gère espaces et astérisques autour de l'emoji
         recommendation_pattern = r'\*{0,2}\s*([🟢🟡🟠🔴][^\n]*?)\s*\*{0,2}(?:\n|$)'
         rec_match = re.search(recommendation_pattern, response_text)
 
-        if not rec_match:
+        ai_recommendation = None
+
+        if rec_match:
+            ai_recommendation = rec_match.group(1).strip()
+        else:
             logger.warning("Impossible d'extraire la recommandation de la réponse")
-            # On prend la première ligne commençant par un emoji
+            # Fallback 1 : première ligne commençant par un emoji
             lines = response_text.split('\n')
             for line in lines:
                 if any(emoji in line for emoji in ['🟢', '🟡', '🟠', '🔴']):
-                    rec_match = re.match(r'.*', line)
+                    ai_recommendation = line.strip()
                     break
 
-        ai_recommendation = rec_match.group(1).strip() if rec_match else "Non déterminée"
+            # Fallback 2 : cherche l'emoji n'importe où dans la réponse
+            if not ai_recommendation:
+                for emoji in ['🟢', '🟡', '🟠', '🔴']:
+                    if emoji in response_text:
+                        for line in response_text.split('\n'):
+                            if emoji in line:
+                                ai_recommendation = line.strip().lstrip('*').strip()
+                                break
+                        if ai_recommendation:
+                            break
+
+        if not ai_recommendation:
+            ai_recommendation = "Non déterminée"
 
         # L'analyse complète est la réponse brute
         ai_analysis = response_text.strip()
@@ -142,9 +190,9 @@ def _parse_ai_response(response_text: str) -> Optional[Dict[str, any]]:
 
     except Exception as e:
         logger.error(f"Erreur lors du parsing de la réponse IA : {e}")
-        # Log de la réponse brute pour diagnostic (300 premiers caractères)
+        # Log de la réponse brute pour diagnostic (fin de la réponse)
         if 'response_text' in locals():
-            logger.debug(f"Réponse brute (300 chars) : {response_text[:300]}")
+            logger.warning(f"Réponse brute (fin, 600 chars) : {response_text[-600:]}")
         return None
 
 
