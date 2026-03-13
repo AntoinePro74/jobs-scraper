@@ -181,20 +181,43 @@ def show_stats(db: DatabaseManager):
             avg_score_row = db.cursor.fetchone()
             avg_score = avg_score_row[0] if avg_score_row[0] is not None else 0
 
-            # Recommendations distribution
+            # Recommendations distribution - fetch all and normalize by emoji
             db.cursor.execute("""
-                SELECT ai_recommendation, COUNT(*)
+                SELECT ai_recommendation
                 FROM job_offers
-                WHERE ai_recommendation IS NOT NULL
-                GROUP BY ai_recommendation
-                ORDER BY ai_recommendation;
+                WHERE ai_recommendation IS NOT NULL;
             """)
             reco_rows = db.cursor.fetchall()
 
-            # Build distribution string
-            reco_dist = []
-            for reco, count in reco_rows:
-                reco_dist.append(f"{reco} {count}")
+            # Normalize: extract emoji or mark as "Non déterminée"
+            emoji_counts = {
+                '🟢': 0,
+                '🟡': 0,
+                '🟠': 0,
+                '🔴': 0,
+                'Non déterminée': 0
+            }
+
+            for (reco,) in reco_rows:
+                # Extract first emoji if present
+                normalized = None
+                for emoji in ['🟢', '🟡', '🟠', '🔴']:
+                    if emoji in reco:
+                        normalized = emoji
+                        break
+                if not normalized:
+                    normalized = "Non déterminée"
+
+                emoji_counts[normalized] += 1
+
+            # Build distribution string in fixed order
+            reco_dist = [
+                f"🟢 {emoji_counts['🟢']}",
+                f"🟡 {emoji_counts['🟡']}",
+                f"🟠 {emoji_counts['🟠']}",
+                f"🔴 {emoji_counts['🔴']}",
+                f"Non déterminée {emoji_counts['Non déterminée']}",
+            ]
 
             # Not scored
             not_scored = total - scored_count if total else 0
