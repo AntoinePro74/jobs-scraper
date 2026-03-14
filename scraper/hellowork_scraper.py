@@ -22,11 +22,15 @@ from webdriver_manager.chrome import ChromeDriverManager
 # Importations des modules internes
 from scraper.models.job_offer import JobOffer, EmploymentType, RemoteWorkType
 from scraper.parsers.job_details_parser import JobDetailsParser
+from .base_scraper import BaseScraper
 
 
-class HelloWorkScraper:
+class HelloWorkScraper(BaseScraper):
     """
-    Classe principale pour scraper les offres d'emploi depuis HelloWork.
+    Scraper HelloWork héritant de BaseScraper.
+
+    Implémente les méthodes spécifiques à HelloWork pour la pagination
+    et l'extraction des offres.
     """
 
     def __init__(self, headless: bool = True):
@@ -36,33 +40,18 @@ class HelloWorkScraper:
         Args:
             headless (bool): Si True, exécute Chrome en mode headless
         """
-        self.logger = logging.getLogger(__name__)
-        self.base_url = "https://www.hellowork.com"
+        # Appeler le constructeur de BaseScraper
+        super().__init__(
+            source_name="hellowork",
+            base_url="https://www.hellowork.com",
+            headless=headless
+        )
+
+        # Session requests pour les requêtes HTTP (si nécessaire)
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
-
-        # Configuration de Selenium
-        self.driver = None
-        self.headless = headless
-
-    def _setup_driver(self):
-        """Configure le driver Selenium avec webdriver-manager."""
-        if self.driver is None:
-            chrome_options = Options()
-            if self.headless:
-                chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--window-size=1920,1080")
-
-            # Utiliser webdriver-manager pour gérer la version de ChromeDriver
-            service = Service(ChromeDriverManager().install())
-
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
-            self.driver.implicitly_wait(10)
 
     def _get_total_pages(self, search_url: str) -> int:
         """
@@ -105,24 +94,24 @@ class HelloWorkScraper:
             self.logger.warning(f"Erreur lors de la détection du nombre de pages: {e}")
             return 1
 
-    def _add_page_param(self, search_url: str, page: int) -> str:
+    def _build_page_url(self, base_url: str, page: int) -> str:
         """
-        Ajoute ou met à jour le paramètre de page dans l'URL.
+        Construit l'URL d'une page spécifique.
 
         Args:
-            search_url (str): URL de recherche
-            page (int): Numéro de page
+            base_url: URL de base de recherche
+            page: Numéro de page (1-indexé)
 
         Returns:
-            str: URL avec le paramètre de page
+            URL complète de la page
         """
         import re
         # Si l'URL contient déjà un paramètre p=, le remplacer
-        if re.search(r'[?&]p=\d+', search_url):
-            return re.sub(r'([?&]p=)\d+', f'\\g<1>{page}', search_url)
+        if re.search(r'[?&]p=\d+', base_url):
+            return re.sub(r'([?&]p=)\d+', f'\\g<1>{page}', base_url)
         # Sinon, ajouter le paramètre
-        separator = '&' if '?' in search_url else '?'
-        return f"{search_url}{separator}p={page}"
+        separator = '&' if '?' in base_url else '?'
+        return f"{base_url}{separator}p={page}"
 
     def scrape_search_results(self, search_url: str, max_pages: Optional[int] = None) -> List[Dict]:
         """
@@ -156,7 +145,7 @@ class HelloWorkScraper:
                 self._setup_driver()
 
                 # Construire l'URL de la page courante
-                page_url = self._add_page_param(search_url, page)
+                page_url = self._build_page_url(search_url, page)
                 self.driver.get(page_url)
 
                 # Attendre le chargement des résultats
@@ -271,61 +260,15 @@ class HelloWorkScraper:
         self.logger.info(f"{len(detailed_offers)} offres traitées avec leurs détails")
         return detailed_offers
 
-    def scrape_search_with_details(
-        self,
-        search_url: str,
-        max_pages: Optional[int] = None,
-        db_manager=None,
-        rescrape_existing: bool = False
-    ) -> List[JobOffer]:
+    def close(self):
         """
-        Scrape les offres d'emploi avec leurs détails complets.
-
-        Args:
-            search_url (str): URL de recherche HelloWork
-            max_pages (Optional[int]): Nombre maximum de pages à scraper
-            db_manager (Optional): DatabaseManager pour vérifier les offres déjà en base
-            rescrape_existing (bool): Force le re-scraping des offres déjà connues
-
-        Returns:
-            List[JobOffer]: Liste des offres avec tous les détails
+        Ferme proprement le driver Selenium et la session HTTP.
+        Surcharge BaseScraper.close() pour fermer aussi la session requests.
         """
-        # D'abord récupérer les offres de base (avec pagination)
-        basic_offers = self.scrape_search_results(search_url, max_pages=max_pages)
+        super().close()  # Ferme le driver Selenium
+        self.session.close()
+        self.logger.info("Scraper fermé proprement")
 
-        if db_manager is not None:
-            if rescrape_existing:
-                # Mode rescrape : scraper TOUTES les URLs
-                self.logger.info(f"Mode rescrape activé : {len(basic_offers)} offres seront re-scrapées")
-                detailed_offers = self.scrape_job_details(basic_offers)
-                return detailed_offers
-            else:
-                # Comportement par défaut : vérifier quelles URLs sont déjà en DB pour éviter de scraper les détails
-                all_urls = [j['url'] for j in basic_offers]
-                existing_urls = db_manager.get_existing_urls(all_urls)
-
-                new_offers_dicts = [j for j in basic_offers if j['url'] not in existing_urls]
-                known_offers_dicts = [j for j in basic_offers if j['url'] in existing_urls]
-
-                self.logger.info(
-                    f"{len(new_offers_dicts)} nouvelles offres à scraper, "
-                    f"{len(known_offers_dicts)} déjà en base (détails non scrapés)"
-                )
-
-                # Scraper les détails uniquement pour les nouvelles offres
-                detailed_new = self.scrape_job_details(new_offers_dicts)
-
-                # Créer des JobOffer minimaux pour les offres connues (sans scraper détails)
-                known_job_offers = [
-                    JobOffer(title=j['title'], url=j['url'], new_offer=False)
-                    for j in known_offers_dicts
-                ]
-
-                return detailed_new + known_job_offers
-        else:
-            # Mode sans DB : scraper toutes les offres normalement
-            detailed_offers = self.scrape_job_details(basic_offers)
-            return detailed_offers
 
     def save_to_csv(self, job_offers: List[JobOffer], filename: str = "job_offers_detailed.csv"):
         """
@@ -349,11 +292,3 @@ class HelloWorkScraper:
         except Exception as e:
             self.logger.error(f"Erreur lors de la sauvegarde des données: {e}")
 
-    def close(self):
-        """Ferme les connexions et drivers."""
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
-
-        self.session.close()
-        self.logger.info("Scraper fermé proprement")
