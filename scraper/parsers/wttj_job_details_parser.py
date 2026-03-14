@@ -261,30 +261,42 @@ class WTTJJobDetailsParser:
         Extrait la localisation.
 
         Utilise le même pattern que contrat/salaire/télétravail :
-        svg[alt="Location"] → parent div → tous les <span> descendants avec texte.
+        svg[alt="Location"] → parent div → extraction des spans feuilles de niveau 3.
+
+        Structure WTTJ attendue :
+        <span>
+          <span>
+            <span class="...">Ville1, </span>
+            <span class="...">Ville2, </span>
+            <span class="...">Ville3</span>
+          </span>
+        </span>
 
         Args:
             soup: Objet BeautifulSoup de la page
 
         Returns:
-            Chaîne de localisation (ex: "Paris, Lyon") ou None
+            Chaîne de localisation (ex: "Rennes, Le Mans, Nantes") ou None
         """
         try:
             # Trouver le bloc contenant l'icône Location
             location_block = self._find_tag_block(soup, "Location")
             if location_block:
-                # Extraire uniquement les spans feuilles (sans span enfant)
-                all_spans = location_block.find_all('span')
+                # Trouver tous les spans feuilles (niveau 3, sans enfant span)
+                leaf_spans = [s for s in location_block.find_all("span") if not s.find("span")]
+
+                # Extraire et filtrer les textes
                 cities = []
-                for span in all_spans:
-                    # Ne garder que les spans qui n'ont pas de span enfant
-                    if not span.find('span'):
-                        text = span.get_text(strip=True)
-                        if text:  # Filtrer les spans vides
-                            cities.append(text)
+                for span in leaf_spans:
+                    text = span.get_text(strip=True)
+                    if text:  # Exclure les chaînes vides
+                        cities.append(text)
 
                 if cities:
-                    return ', '.join(cities)
+                    # Joindre avec espace simple (les virgules sont déjà dans les textes)
+                    result = ' '.join(cities)
+                    # Supprimer la virgule finale si présente
+                    return result.rstrip(", ").strip()
 
             # Si le bloc n'est pas trouvé, logger un warning
             self.logger.warning("Bloc localisation (svg alt='Location') non trouvé")
