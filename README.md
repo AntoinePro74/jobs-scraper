@@ -1,8 +1,9 @@
 # Multi-Site Job Scraper
 
-Un outil Python de veille automatisée des offres d'emploi sur **HelloWork** et 
-**Welcome to the Jungle**, conçu pour **gagner du temps dans la recherche d'emploi** : 
-collecter, scorer, dédupliquer, suivre et piloter ses candidatures depuis un seul endroit.
+Un outil Python de veille automatisée des offres d'emploi sur **HelloWork**,
+**Welcome to the Jungle** et **APEC**, conçu pour **gagner du temps dans la
+recherche d'emploi** : collecter, scorer, dédupliquer, suivre et piloter ses
+candidatures depuis un seul endroit.
 
 ## Objectif
 
@@ -21,7 +22,7 @@ postuler aux bonnes offres.
 
 ## Fonctionnalités
 
-- **Multi-sources** : HelloWork et Welcome to the Jungle dans un seul run
+- **Multi-sources** : HelloWork, Welcome to the Jungle et APEC dans un seul run
 - Scraping des pages de résultats avec gestion de la pagination
 - Extraction des détails complets : titre, entreprise, localisation, contrat, télétravail, salaire, description, date
 - **Déduplication automatique** : vérifie chaque URL en base avant de scraper les détails
@@ -49,9 +50,11 @@ postuler aux bonnes offres.
 ├── .env                        # Credentials PostgreSQL + OpenRouter (non versionné)
 ├── .env.example                # Template .env
 ├── scraper/
-│   ├── base_scraper.py         # Classe abstraite BaseScraper (architecture commune)
+│   ├── base_scraper.py         # Classe abstraite BaseScraper (Selenium)
+│   ├── base_api_scraper.py     # Classe abstraite BaseApiScraper (REST API, sans Selenium)
 │   ├── hellowork_scraper.py    # Scraper HelloWork (hérite de BaseScraper)
 │   ├── wttj_scraper.py         # Scraper Welcome to the Jungle (hérite de BaseScraper)
+│   ├── apec_scraper.py         # Scraper APEC (hérite de BaseApiScraper)
 │   ├── models/
 │   │   └── job_offer.py        # Modèle de données JobOffer
 │   ├── parsers/
@@ -69,25 +72,33 @@ postuler aux bonnes offres.
 
 ### Architecture extensible
 
-Le projet repose sur une classe abstraite `BaseScraper` qui centralise la logique
-commune (driver Selenium, pipeline scraping, gestion DB). Ajouter une nouvelle
-source se résume à créer un fichier `xxx_scraper.py` héritant de `BaseScraper`
-et l'enregistrer dans le `SCRAPER_REGISTRY` de `run_scraper.py`.
+Le projet repose sur **deux classes abstraites** selon la nature de la source :
+
+| Classe de base | Technologie | Usage |
+|---|---|---|
+| `BaseScraper` | Selenium | Sites avec rendu JavaScript (HelloWork, WTTJ) |
+| `BaseApiScraper` | requests | Sources avec API REST JSON (APEC) |
+
+Les deux classes exposent la **même interface publique** (`scrape_search_with_details`) et s'intègrent identiquement dans le `SCRAPER_REGISTRY`.
 
 ```python
-# Ajouter une nouvelle source en 2 étapes :
-
-# 1. scraper/xxx_scraper.py
+# Ajouter une source Selenium (pages JS) :
 class XxxScraper(BaseScraper):
     def _get_total_pages(self, search_url): ...
     def _build_page_url(self, base_url, page): ...
     def scrape_search_results(self, search_url, max_pages=None): ...
     def scrape_job_details(self, job_offers): ...
 
-# 2. run_scraper.py
+# Ajouter une source API REST :
+class YyyScraper(BaseApiScraper):
+    def scrape_search_results(self, search_url, max_pages=None): ...
+    def scrape_job_details(self, job_offers): ...
+
+# Dans les deux cas, même enregistrement :
 SCRAPER_REGISTRY = {
     "hellowork": HelloWorkScraper,
     "wttj": WttjScraper,
+    "apec": ApecScraper,
     "xxx": XxxScraper,   # ← ajouter ici
 }
 ```
@@ -96,7 +107,7 @@ SCRAPER_REGISTRY = {
 
 - Python 3.10+
 - PostgreSQL 14+
-- Google Chrome + ChromeDriver (compatibles, gérés automatiquement par `webdriver-manager`)
+- Google Chrome + ChromeDriver (pour HelloWork et WTTJ, gérés automatiquement par `webdriver-manager`)
 - Compte [OpenRouter](https://openrouter.ai/) (accès gratuit disponible)
 
 ## Installation
@@ -163,8 +174,16 @@ SEARCH_PROFILES = [
         "label": "Account Manager WTTJ",
         "url": "https://www.welcometothejungle.com/fr/jobs?query=%22Account%20Manager%22&refinementList%5Bcontract_type%5D%5B%5D=full_time&refinementList%5Boffices.country_code%5D%5B%5D=FR&refinementList%5Bremote%5D%5B%5D=fulltime&page=1&sortBy=mostRecent"
     },
+    # Profils APEC (passer l'URL de recherche frontend directement)
+    {
+        "site": "apec",
+        "label": "Account Manager APEC CDI télétravail",
+        "url": "https://www.apec.fr/candidat/recherche-emploi.html/emploi?motsCles=account+manager&typesContrat=101888&typesTeletravail=20767&sortsType=DATE"
+    },
 ]
 ```
+
+> **Note APEC** : l'URL est l'URL frontend telle qu'elle apparaît dans le navigateur après avoir configuré tes filtres sur apec.fr. Les paramètres `typesContrat` (ex: `101888` = CDI) et `typesTeletravail` (ex: `20767` = télétravail complet) sont extraits automatiquement par le scraper.
 
 ## Utilisation
 
@@ -177,12 +196,14 @@ python run_scraper.py
 # Limiter à N pages par profil (test rapide)
 python run_scraper.py --max-pages 2
 
-# Afficher les navigateurs (debug, mode non-headless)
+# Afficher les navigateurs Selenium (debug, mode non-headless)
 python run_scraper.py --visible
 
 # Re-scraper les offres déjà connues en base
 python run_scraper.py --rescrape-existing
 ```
+
+> **Note** : `--visible` n'a d'effet que sur les scrapers Selenium (HelloWork, WTTJ). APEC utilise une API REST et n'ouvre aucun navigateur.
 
 ### Scorer les offres (IA)
 
@@ -207,7 +228,7 @@ python manage_jobs.py list --active
 python manage_jobs.py list --applied
 
 # Marquer une candidature
-python manage_jobs.py apply "https://www.hellowork.com/fr-fr/emplois/..."
+python manage_jobs.py apply "https://www.apec.fr/candidat/recherche-emploi.html/emploi/detail-offre/178350363W"
 
 # Statistiques globales
 python manage_jobs.py stats
@@ -275,7 +296,7 @@ CREATE TABLE job_offers (
     location        TEXT,
     employment_type TEXT,
     remote_work     TEXT,
-    source          TEXT,                   -- 'hellowork' ou 'wttj'
+    source          TEXT,                   -- 'hellowork', 'wttj' ou 'apec'
     salary          TEXT,
     description     TEXT,
     date_posted     TEXT,
@@ -308,7 +329,8 @@ WHERE scraped_at > NOW() - INTERVAL '7 days';
 
 ## Technologies
 
-- **Selenium** : navigation automatisée sur pages JavaScript
+- **Selenium** : navigation automatisée sur pages JavaScript (HelloWork, WTTJ)
+- **requests** : appels API REST (APEC)
 - **BeautifulSoup + lxml** : parsing HTML
 - **psycopg2** : connexion PostgreSQL
 - **pandas** : export CSV
@@ -338,7 +360,8 @@ OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxx
 
 - **Taux de scoring réussi** : ~85% (limite du modèle free OpenRouter)
 - **Taux de parsing valide** : ~92% des réponses exploitables
-- **Durée par offre** : ~15-20 secondes (latence API)
+- **Durée par offre (scoring)** : ~15-20 secondes (latence API)
+- **Durée par offre APEC (détail)** : ~0.6s (0.5s sleep + réseau)
 - **Corpus testé** : 147 offres multi-sources, score moyen 4.5/10
 
 ---
@@ -346,6 +369,7 @@ OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxx
 ## 🗺️ Roadmap
 
 - [x] Ajout scraper Welcome to the Jungle
+- [x] Ajout scraper APEC (via API REST, sans Selenium)
 - [ ] Ajout scraper JobUp.ch (marché franco-suisse)
 - [ ] Dashboard de visualisation (Metabase / Power BI)
 - [ ] Déduplication avancée sur `(title, company, location)`
