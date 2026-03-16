@@ -38,7 +38,7 @@ class ApecScraper(BaseApiScraper):
         20766: RemoteWorkType.OCCASIONAL,
     }
 
-    def __init__(self):
+    def __init__(self, headless: bool = True):
         """
         Initialise le scraper APEC.
         """
@@ -71,13 +71,38 @@ class ApecScraper(BaseApiScraper):
             "motsCles": query_params.get("motsCles", [""])[0] or "",
             "typesContrat": to_list(query_params.get("typesContrat", [])),
             "typesTeletravail": to_list(query_params.get("typesTeletravail", [])),
+            "typesConvention": to_list(query_params.get("typesConvention", [])),  # niveaux de convention (cadre, etc.)
             "fonctions": [],
-            "lieux": [],
             "statutPoste": [],
             "niveauxExperience": [],
             "secteursActivite": [],
+            "idNomZonesDeplacement": [],
+            "idsEtablissement": [],
+            "positionNumbersExcluded": [],
             "typeClient": "CADRE"
         }
+
+        # Gérer la localisation : lieux = liste d'IDs APEC (ex: ["590678"])
+        lieux_ids = query_params.get("lieux", [])
+        payload["lieux"] = lieux_ids
+
+        # Gérer le rayon géographique : lat/lng encodés directement dans l'URL
+        # (paramètres non-standard ajoutés manuellement dans config.py)
+        # Exemple URL : &lieux=590678&distance=50&lat=45.9957666&lng=6.2493631
+        distance = query_params.get("distance", ["0"])[0]
+        lat = query_params.get("lat", [None])[0]
+        lng = query_params.get("lng", [None])[0]
+
+        if lieux_ids and lat and lng:
+            # Recherche géolocalisée avec rayon
+            payload["pointGeolocDeReference"] = {
+                "latitude": float(lat),
+                "longitude": float(lng),
+                "distance": distance  # string, format attendu par l'API APEC
+            }
+        else:
+            # Pas de géolocalisation (recherche nationale)
+            payload["pointGeolocDeReference"] = {"distance": 0}
 
         # Gérer le tri
         sort_type = query_params.get("sortsType", ["DATE"])[0]
