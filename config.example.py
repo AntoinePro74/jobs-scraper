@@ -20,4 +20,11 @@ SEARCH_PROFILES = [
         "label": "Account Manager WTTJ",
         "url": "https://www.welcometothejungle.com/fr/jobs?query=%22Account%20Manager%22&refinementList%5Bcontract_type%5D%5B%5D=full_time&refinementList%5Boffices.country_code%5D%5B%5D=FR&refinementList%5Bremote%5D%5B%5D=fulltime&page=1&sortBy=mostRecent&aroundQuery=France&collections%5B%5D=remote_friendly"
     },
+
+    # Profil APEC
+    {
+        "site": "apec",
+        "label": "Account Manager APEC CDI télétravail",
+        "url": "https://www.apec.fr/candidat/recherche-emploi.html/emploi?motsCles=account+manager&typesContrat=101888&typesTeletravail=20767&sortsType=DATE"
+    },
 ]

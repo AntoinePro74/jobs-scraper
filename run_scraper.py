@@ -14,6 +14,7 @@ from pathlib import Path
 from datetime import datetime
 from scraper.hellowork_scraper import HelloWorkScraper
 from scraper.wttj_scraper import WttjScraper
+from scraper.apec_scraper import ApecScraper
 from scraper.models.job_offer import JobOffer
 from scraper.database.db_manager import DatabaseManager
 from config import SEARCH_PROFILES
@@ -134,6 +135,7 @@ def main():
     SCRAPER_REGISTRY = {
         "hellowork": HelloWorkScraper,
         "wttj": WttjScraper,
+        "apec": ApecScraper,
     }
 
     # Déterminer les URLs à scraper
