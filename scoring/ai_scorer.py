@@ -12,8 +12,9 @@ import os
 import re
 import time
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from openai import OpenAI
+from scoring_prompt import SCORING_PROMPT_TEMPLATE
 
 logger = logging.getLogger(__name__)
 
@@ -21,75 +22,6 @@ logger = logging.getLogger(__name__)
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_MODEL = "stepfun/step-3.5-flash:free"
 
-
-def _load_scoring_prompt() -> str:
-    """
-    Charge le prompt de scoring depuis scoring_prompt.py (fichier personnel).
-    Si le fichier n'existe pas, utilise scoring_prompt.example.py et log un warning.
-
-    Returns:
-        str: Le template de prompt
-    """
-    # Essayer d'abord le fichier personnel
-    personal_prompt_path = "scoring_prompt.py"
-    example_prompt_path = "scoring_prompt.example.py"
-
-    try:
-        if os.path.exists(personal_prompt_path):
-            with open(personal_prompt_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            logger.info(f"Prompt de scoring chargé depuis {personal_prompt_path}")
-            return content
-        else:
-            logger.warning(
-                f"Fichier {personal_prompt_path} non trouvé. "
-                f"Utilisation de l'exemple {example_prompt_path}. "
-                f"Créez votre propre fichier {personal_prompt_path} pour personnaliser le prompt."
-            )
-            with open(example_prompt_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            return content
-    except FileNotFoundError as e:
-        logger.error(f"Impossible de charger le prompt : {e}")
-        raise
-    except Exception as e:
-        logger.error(f"Erreur lors de la lecture du prompt : {e}")
-        raise
-
-
-def _format_job_offer_for_prompt(job: Dict) -> str:
-    """
-    Construit le texte de l'offre à injecter dans le prompt.
-
-    Args:
-        job: Dictionnaire contenant les champs de l'offre
-
-    Returns:
-        str: Description formatée de l'offre
-    """
-    parts = []
-
-    # Titre et entreprise
-    parts.append(f"**Titre**: {job.get('title', 'N/A')}")
-    parts.append(f"**Entreprise**: {job.get('company', 'N/A')}")
-    parts.append(f"**Localisation**: {job.get('location', 'N/A')}")
-
-    # Type de contrat et télétravail
-    employment_type = job.get('employment_type', 'N/A')
-    remote_work = job.get('remote_work', 'N/A')
-    parts.append(f"**Type de contrat**: {employment_type}")
-    parts.append(f"**Télétravail**: {remote_work}")
-
-    # Salaire
-    salary = job.get('salary')
-    if salary:
-        parts.append(f"**Salaire**: {salary}")
-
-    # Description (champ le plus important)
-    description = job.get('description', 'Aucune description fournie')
-    parts.append(f"\n**Description complète**:\n{description}")
-
-    return "\n".join(parts)
 
 
 def _parse_ai_response(response_text: str) -> Optional[Dict[str, any]]:
@@ -106,7 +38,17 @@ def _parse_ai_response(response_text: str) -> Optional[Dict[str, any]]:
     try:
         # Extraction du score global avec regex permissive
         # Gère : **Score global**, espaces optionnels, score entier ou décimal, astérisques
-        score_pattern = r'\*{0,2}[Ss]core\s+[Gg]lobal(?:\s+[Pp]ondéré)?\s*\*{0,2}\s*:\s*\*{0,2}\s*(\d+(?:[.,]\d+)?)\s*\*{0,2}\s*/\s*10'
+        score_pattern = (
+            r'\*{0,2}[Ss]core'           # "Score" avec astérisques optionnels
+            r'(?:\s+[Gg]lobal)?'         # "global" optionnel
+            r'(?:\s+[Pp]ondéré)?'        # "pondéré" optionnel
+            r'\s*\*{0,2}'                # astérisques fermants optionnels
+            r'\s*[:=]\s*'                # séparateur : ou =
+            r'\*{0,2}\s*'                # astérisques avant le chiffre
+            r'(\d+(?:[.,]\d+)?)'         # le score (entier ou décimal, . ou ,)
+            r'\s*\*{0,2}'                # astérisques après le chiffre
+            r'\s*/\s*10'                 # /10
+        )
         score_match = re.search(score_pattern, response_text)
 
         if not score_match:
@@ -133,14 +75,17 @@ def _parse_ai_response(response_text: str) -> Optional[Dict[str, any]]:
                             logger.warning(f"Score calculé via somme pondérée : {ai_score}")
                         else:
                             logger.warning("Impossible d'extraire le score global de la réponse")
+                            logger.warning(f"Réponse brute (début, 200 chars) : {response_text[:200]}")
                             logger.warning(f"Réponse brute (fin, 600 chars) : {response_text[-600:]}")
                             return None
                     except Exception as e:
                         logger.warning(f"Erreur lors du calcul des pondérations : {e}")
+                        logger.warning(f"Réponse brute (début, 200 chars) : {response_text[:200]}")
                         logger.warning(f"Réponse brute (fin, 600 chars) : {response_text[-600:]}")
                         return None
                 else:
                     logger.warning("Impossible d'extraire le score global de la réponse")
+                    logger.warning(f"Réponse brute (début, 200 chars) : {response_text[:200]}")
                     logger.warning(f"Réponse brute (fin, 600 chars) : {response_text[-600:]}")
                     return None
         else:
@@ -190,34 +135,55 @@ def _parse_ai_response(response_text: str) -> Optional[Dict[str, any]]:
 
     except Exception as e:
         logger.error(f"Erreur lors du parsing de la réponse IA : {e}")
-        # Log de la réponse brute pour diagnostic (fin de la réponse)
+        # Log de la réponse brute pour diagnostic (début et fin)
         if 'response_text' in locals():
+            logger.warning(f"Réponse brute (début, 200 chars) : {response_text[:200]}")
             logger.warning(f"Réponse brute (fin, 600 chars) : {response_text[-600:]}")
         return None
 
 
-def score_job_offer(job: Dict) -> Optional[Dict[str, any]]:
+def score_job_offer(job: Dict) -> Optional[Dict[str, Any]]:
     """
     Score une offre d'emploi via l'API OpenRouter.
 
     Args:
         job: Dictionnaire contenant les champs de l'offre
-            (title, company, location, employment_type, remote_work, salary, description)
+            (title, company, location, employment_type, remote_work, salary, source, date_posted, description)
 
     Returns:
         Dict avec ai_score (float), ai_recommendation (str), ai_analysis (str)
         ou None en cas d'échec
     """
-    # Charger le prompt
-    try:
-        prompt_template = _load_scoring_prompt()
-    except Exception as e:
-        logger.error(f"Impossible de charger le prompt : {e}")
-        return None
+    def _safe(value: Any, default: str = "Non renseigné") -> str:
+        """Retourne la valeur ou le défaut si None/vide."""
+        if value is None or str(value).strip() == "":
+            return default
+        return str(value).strip()
 
-    # Formater l'offre
-    job_offer_text = _format_job_offer_for_prompt(job)
-    prompt = prompt_template.format(job_offer=job_offer_text)
+    # Formater le prompt avec injection directe des champs
+    # Tronquer la description si nécessaire pour respecter les limites de tokens
+    description_value = _safe(job.get('description'),
+                              default="Aucune description fournie")
+    if len(description_value) > 5500:
+        logger.debug(
+            f"Description tronquée : {len(description_value)} chars → 5500"
+        )
+        description_value = description_value[:5500] + \
+                            "\n[...description tronquée pour limite tokens...]"
+
+    prompt = SCORING_PROMPT_TEMPLATE.format(
+        title=_safe(job.get('title')),
+        company=_safe(job.get('company')),
+        location=_safe(job.get('location')),
+        employment_type=_safe(job.get('employment_type')),
+        remote_work=_safe(job.get('remote_work')),
+        salary=_safe(job.get('salary')),
+        source=_safe(job.get('source')),
+        date_posted=_safe(job.get('date_posted')),
+        description=description_value,
+    )
+
+    logger.debug(f"Prompt généré (longueur: {len(prompt)} chars)")
 
     # Configurer le client OpenAI pour OpenRouter
     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -244,14 +210,23 @@ def score_job_offer(job: Dict) -> Optional[Dict[str, any]]:
                         "content": prompt
                     }
                 ],
-                max_tokens=3000,
+                max_tokens=6000,
                 temperature=0.7
             )
 
             content = response.choices[0].message.content
             if not content or content.strip() == "":
-                logger.warning("Réponse vide reçue de l'API (content=None ou vide)")
-                return None  # déclenchera le retry existant
+                logger.warning(
+                    f"Réponse vide reçue de l'API (tentative {attempt + 1}/{max_retries})"
+                )
+                if attempt < max_retries - 1:
+                    sleep_time = 10 * (attempt + 1)
+                    logger.info(f"Pause de {sleep_time}s avant retry...")
+                    time.sleep(sleep_time)
+                    continue
+                else:
+                    logger.error("Réponse vide après tous les retries")
+                    return None
             response_text = content.strip()
 
             # Parser la réponse
@@ -260,6 +235,7 @@ def score_job_offer(job: Dict) -> Optional[Dict[str, any]]:
                 logger.info(f"Offre scorée : score={result['ai_score']}, reco={result['ai_recommendation'][:30]}...")
                 return result
             else:
+                logger.debug(f"Réponse complète ({len(response_text)} chars) : {response_text}")
                 logger.warning("Réponse reçue mais impossible à parser")
                 return None
 
@@ -270,7 +246,7 @@ def score_job_offer(job: Dict) -> Optional[Dict[str, any]]:
             # Gestion des retry selon le code d'erreur
             if "429" in error_msg or "rate limit" in error_msg.lower():
                 if attempt < max_retries - 1:
-                    sleep_time = 5 * (attempt + 1)
+                    sleep_time = 10 * (attempt + 1)
                     logger.info(f"Rate limit détecté, pause de {sleep_time}s avant retry...")
                     time.sleep(sleep_time)
                     continue
@@ -305,7 +281,7 @@ def score_pending_jobs(db_manager, limit: int = 20) -> int:
         # Récupérer les offres à scorer
         query = """
             SELECT title, url, company, location, employment_type, remote_work,
-                   salary, description, date_posted
+                   salary, description, date_posted, source
             FROM job_offers
             WHERE ai_score IS NULL AND is_active = TRUE
             LIMIT %s;
@@ -332,6 +308,7 @@ def score_pending_jobs(db_manager, limit: int = 20) -> int:
                 'salary': row[6],
                 'description': row[7],
                 'date_posted': row[8],
+                'source': row[9],
             }
             jobs_to_score.append(job_dict)
 
