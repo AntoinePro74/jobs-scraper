@@ -180,10 +180,23 @@ SEARCH_PROFILES = [
         "label": "Account Manager APEC CDI télétravail",
         "url": "https://www.apec.fr/candidat/recherche-emploi.html/emploi?motsCles=account+manager&typesContrat=101888&typesTeletravail=20767&sortsType=DATE"
     },
+    # France Travail - Account Manager (France, CDI)
+    {
+        "label": "Account Manager France France Travail",
+        "site": "france_travail",
+        "url": "https://candidat.francetravail.fr/offres/recherche?emission=1&lieux=99100&motsCles=Account+Manager&offresPartenaires=true&range=0-19&rayon=10&tri=0&typeContrat=CDI"
+    },
 ]
 ```
 
 > **Note APEC** : l'URL est l'URL frontend telle qu'elle apparaît dans le navigateur après avoir configuré tes filtres sur apec.fr. Les paramètres `typesContrat` (ex: `101888` = CDI) et `typesTeletravail` (ex: `20767` = télétravail complet) sont extraits automatiquement par le scraper.
+>
+> **Note France Travail** : le scraper utilise l'API partenaire France Travail (OAuth2). Tu dois créer une application sur [francetravail.io](https://francetravail.io/) pour obtenir un `client_id` et `client_secret`. Ajoute ces identifiants dans ton `.env` :
+> ```env
+> FRANCE_TRAVAIL_CLIENT_ID=ton_client_id
+> FRANCE_TRAVAIL_CLIENT_SECRET=ton_client_secret
+> ```
+> Les profils se configurent de la même façon avec `"site": "france_travail"`. Les paramètres d'URL supportés sont : `motsCles`, `departement` (code INSEE), `typeContrat` (CDI, CDD...), `publieeDepuis` (nombre de jours).
 
 ## Utilisation
 
@@ -370,10 +383,13 @@ OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxx
 
 - [x] Ajout scraper Welcome to the Jungle
 - [x] Ajout scraper APEC (via API REST, sans Selenium)
+- [x] Ajout scraper France Travail (via API REST, sans Selenium)
+- [x] Automatisation via n8n avec message télégram quotidien
 - [ ] Ajout scraper JobUp.ch (marché franco-suisse)
-- [ ] Dashboard de visualisation (Metabase / Power BI)
+- [ ] Ajout dans n8n d'une vérification hebdo qu'il n'y a pas d'annonce vide en base
+- [ ] Ajout dans n8n d'une vérification hebdo qu'il n'y a pas de scoring non exploitable
+- [ ] Ajout dans n8n d'un intéraction via télégram pour avoir le Top des offres dispos
 - [ ] Déduplication avancée sur `(title, company, location)`
-- [ ] Planification automatique (cron / launchd)
 
 ---
 
