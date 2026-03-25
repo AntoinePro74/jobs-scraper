@@ -27,4 +27,10 @@ SEARCH_PROFILES = [
         "label": "Account Manager APEC CDI télétravail",
         "url": "https://www.apec.fr/candidat/recherche-emploi.html/emploi?motsCles=account+manager&typesContrat=101888&typesTeletravail=20767&sortsType=DATE"
     },
+    # Profil France Travail 
+    {
+        "label": "Account Manager France France Travail",
+        "site": "france_travail",
+        "url": "https://candidat.francetravail.fr/offres/recherche?emission=1&lieux=99100&motsCles=Account+Manager&offresPartenaires=true&range=0-19&rayon=10&tri=0&typeContrat=CDI"
+    },
 ]
