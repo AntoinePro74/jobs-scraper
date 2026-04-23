@@ -16,6 +16,7 @@ from scraper.hellowork_scraper import HelloWorkScraper
 from scraper.wttj_scraper import WttjScraper
 from scraper.apec_scraper import ApecScraper
 from scraper.france_travail_scraper import FranceTravailScraper
+from scraper.jobup_scraper import JobupScraper
 from scraper.models.job_offer import JobOffer
 from scraper.database.db_manager import DatabaseManager
 from config import SEARCH_PROFILES
@@ -138,6 +139,7 @@ def main():
         "wttj": WttjScraper,
         "apec": ApecScraper,
         "france_travail": FranceTravailScraper,
+        "jobup": JobupScraper,
     }
 
     # Déterminer les URLs à scraper
