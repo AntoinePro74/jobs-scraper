@@ -1,9 +1,7 @@
 # Multi-Site Job Scraper
 
 Un outil Python de veille automatisée des offres d'emploi sur **HelloWork**,
-**Welcome to the Jungle** et **APEC**, conçu pour **gagner du temps dans la
-recherche d'emploi** : collecter, scorer, dédupliquer, suivre et piloter ses
-candidatures depuis un seul endroit.
+**Welcome to the Jungle**, **APEC**, **France Travail** et **Jobup**, conçu pour **gagner du temps dans la recherche d'emploi** : collecter, scorer, dédupliquer, suivre et piloter ses candidatures depuis un seul endroit.
 
 ## Objectif
 
@@ -22,12 +20,12 @@ postuler aux bonnes offres.
 
 ## Fonctionnalités
 
-- **Multi-sources** : HelloWork, Welcome to the Jungle et APEC dans un seul run
+- **Multi-sources** : HelloWork, Welcome to the Jungle, APEC, France Travail et Jobup dans un seul run
 - Scraping des pages de résultats avec gestion de la pagination
 - Extraction des détails complets : titre, entreprise, localisation, contrat, télétravail, salaire, description, date
 - **Déduplication automatique** : vérifie chaque URL en base avant de scraper les détails
 - **Persistance PostgreSQL** : toutes les offres sont stockées avec leur historique
-- **Scoring IA** par offre via OpenRouter API (modèle `stepfun/step-3.5-flash`) :
+- **Scoring IA** par offre via OpenRouter API (modèle `nvidia/nemotron-3-super-120b-a12b:free`) :
   - Analyse sur 5 critères pondérés (alignement compétences, potentiel de progression, probabilité d'être retenu, attractivité entreprise, faisabilité pratique)
   - Score global `/10` et recommandation (🟢🟡🟠🔴)
 - **Suivi des candidatures** : marque les offres où tu as postulé (`applied`)
@@ -55,6 +53,8 @@ postuler aux bonnes offres.
 │   ├── hellowork_scraper.py    # Scraper HelloWork (hérite de BaseScraper)
 │   ├── wttj_scraper.py         # Scraper Welcome to the Jungle (hérite de BaseScraper)
 │   ├── apec_scraper.py         # Scraper APEC (hérite de BaseApiScraper)
+│   ├── france_travail_scraper.py         # Scraper France Travail (hérite de BaseApiScraper)
+│   ├── jobup_scraper.py         # Scraper jobup (hérite de BaseApiScraper)
 │   ├── models/
 │   │   └── job_offer.py        # Modèle de données JobOffer
 │   ├── parsers/
@@ -77,7 +77,7 @@ Le projet repose sur **deux classes abstraites** selon la nature de la source :
 | Classe de base | Technologie | Usage |
 |---|---|---|
 | `BaseScraper` | Selenium | Sites avec rendu JavaScript (HelloWork, WTTJ) |
-| `BaseApiScraper` | requests | Sources avec API REST JSON (APEC) |
+| `BaseApiScraper` | requests | Sources avec API REST JSON (APEC, Jobup) |
 
 Les deux classes exposent la **même interface publique** (`scrape_search_with_details`) et s'intègrent identiquement dans le `SCRAPER_REGISTRY`.
 
@@ -174,17 +174,11 @@ SEARCH_PROFILES = [
         "label": "Account Manager WTTJ",
         "url": "https://www.welcometothejungle.com/fr/jobs?query=%22Account%20Manager%22&refinementList%5Bcontract_type%5D%5B%5D=full_time&refinementList%5Boffices.country_code%5D%5B%5D=FR&refinementList%5Bremote%5D%5B%5D=fulltime&page=1&sortBy=mostRecent"
     },
-    # Profils APEC (passer l'URL de recherche frontend directement)
+    # Profils Jobup (marché suisse)
     {
-        "site": "apec",
-        "label": "Account Manager APEC CDI télétravail",
-        "url": "https://www.apec.fr/candidat/recherche-emploi.html/emploi?motsCles=account+manager&typesContrat=101888&typesTeletravail=20767&sortsType=DATE"
-    },
-    # France Travail - Account Manager (France, CDI)
-    {
-        "label": "Account Manager France France Travail",
-        "site": "france_travail",
-        "url": "https://candidat.francetravail.fr/offres/recherche?emission=1&lieux=99100&motsCles=Account+Manager&offresPartenaires=true&range=0-19&rayon=10&tri=0&typeContrat=CDI"
+        "site": "jobup",
+        "label": "Jobup Account Manager",
+        "url": "https://www.jobup.ch/fr/emplois/?publication-date=7&region=36&region=37&sort-by=date&term=%22account%20manager%22"
     },
 ]
 ```
@@ -343,7 +337,7 @@ WHERE scraped_at > NOW() - INTERVAL '7 days';
 ## Technologies
 
 - **Selenium** : navigation automatisée sur pages JavaScript (HelloWork, WTTJ)
-- **requests** : appels API REST (APEC)
+- **requests** : appels API REST (APEC, Jobup)
 - **BeautifulSoup + lxml** : parsing HTML
 - **psycopg2** : connexion PostgreSQL
 - **pandas** : export CSV
@@ -385,10 +379,10 @@ OPENROUTER_API_KEY=sk-or-xxxxxxxxxxxx
 - [x] Ajout scraper APEC (via API REST, sans Selenium)
 - [x] Ajout scraper France Travail (via API REST, sans Selenium)
 - [x] Automatisation via n8n avec message télégram quotidien
-- [ ] Ajout scraper JobUp.ch (marché franco-suisse)
+- [x] Ajout scraper JobUp.ch (marché franco-suisse)
+- [x] Ajout dans n8n d'une vérification hebdo qu'il n'y a pas de scoring non exploitable
+- [x] Ajout dans n8n d'un intéraction via télégram pour avoir le Top des offres dispos
 - [ ] Ajout dans n8n d'une vérification hebdo qu'il n'y a pas d'annonce vide en base
-- [ ] Ajout dans n8n d'une vérification hebdo qu'il n'y a pas de scoring non exploitable
-- [ ] Ajout dans n8n d'un intéraction via télégram pour avoir le Top des offres dispos
 - [ ] Déduplication avancée sur `(title, company, location)`
 
 ---
