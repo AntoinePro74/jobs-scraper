@@ -72,7 +72,7 @@ def main():
             else:
                 logger.info(f"Mode : limité à {args.limit} offres")
 
-            scored_count = score_pending_jobs(db, limit=limit if limit else args.limit)
+            scored_count = score_pending_jobs(db, limit=limit)
 
             logger.info("=" * 70)
             logger.info(f"RÉSUMÉ : {scored_count} offres scorées")
