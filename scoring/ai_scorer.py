@@ -4,23 +4,23 @@
 """
 Scorer IA pour évaluer les offres d'emploi avec OpenRouter.
 
-Utilise le modèle StepFun via OpenRouter pour analyser les offres
+Utilise le modèle nvidia/nemotron-3-super-120b-a12b:free via OpenRouter pour analyser les offres
 et fournir un score, une recommandation et une analyse détaillée.
 """
 
 import os
 import re
-import time
+import asyncio
+import httpx
 import logging
 from typing import Optional, Dict, Any
-from openai import OpenAI
 from scoring_prompt import SCORING_PROMPT_TEMPLATE
 
 logger = logging.getLogger(__name__)
 
 # Configuration OpenRouter
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MODEL = "stepfun/step-3.5-flash:free"
+OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 
 
 
@@ -142,17 +142,9 @@ def _parse_ai_response(response_text: str) -> Optional[Dict[str, any]]:
         return None
 
 
-def score_job_offer(job: Dict) -> Optional[Dict[str, Any]]:
+async def _score_job_offer_async(client: httpx.AsyncClient, semaphore: asyncio.Semaphore, job: Dict) -> Optional[Dict[str, Any]]:
     """
-    Score une offre d'emploi via l'API OpenRouter.
-
-    Args:
-        job: Dictionnaire contenant les champs de l'offre
-            (title, company, location, employment_type, remote_work, salary, source, date_posted, description)
-
-    Returns:
-        Dict avec ai_score (float), ai_recommendation (str), ai_analysis (str)
-        ou None en cas d'échec
+    Score une offre d'emploi via l'API OpenRouter de manière asynchrone.
     """
     def _safe(value: Any, default: str = "Non renseigné") -> str:
         """Retourne la valeur ou le défaut si None/vide."""
@@ -160,16 +152,11 @@ def score_job_offer(job: Dict) -> Optional[Dict[str, Any]]:
             return default
         return str(value).strip()
 
-    # Formater le prompt avec injection directe des champs
-    # Tronquer la description si nécessaire pour respecter les limites de tokens
-    description_value = _safe(job.get('description'),
-                              default="Aucune description fournie")
+    # Formater le prompt
+    description_value = _safe(job.get('description'), default="Aucune description fournie")
     if len(description_value) > 5500:
-        logger.debug(
-            f"Description tronquée : {len(description_value)} chars → 5500"
-        )
-        description_value = description_value[:5500] + \
-                            "\n[...description tronquée pour limite tokens...]"
+        logger.debug(f"Description tronquée : {len(description_value)} chars → 5500")
+        description_value = description_value[:5500] + "\n[...description tronquée pour limite tokens...]"
 
     prompt = SCORING_PROMPT_TEMPLATE.format(
         title=_safe(job.get('title')),
@@ -183,102 +170,82 @@ def score_job_offer(job: Dict) -> Optional[Dict[str, Any]]:
         description=description_value,
     )
 
-    logger.debug(f"Prompt généré (longueur: {len(prompt)} chars)")
-
-    # Configurer le client OpenAI pour OpenRouter
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         logger.error("OPENROUTER_API_KEY non définie dans l'environnement")
         return None
 
-    client = OpenAI(
-        base_url=OPENROUTER_BASE_URL,
-        api_key=api_key,
-    )
-
-    # Appel avec retry
-    max_retries = 3  # 2 retries + 1 essai initial
+    max_retries = 3
     for attempt in range(max_retries):
         try:
-            logger.debug(f"Appel OpenRouter (tentative {attempt + 1}/{max_retries})")
+            async with semaphore:
+                logger.debug(f"Appel OpenRouter (tentative {attempt + 1}/{max_retries}) pour {job['url']}")
 
-            response = client.chat.completions.create(
-                model=OPENROUTER_MODEL,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                max_tokens=6000,
-                temperature=0.7
-            )
-
-            content = response.choices[0].message.content
-            if not content or content.strip() == "":
-                logger.warning(
-                    f"Réponse vide reçue de l'API (tentative {attempt + 1}/{max_retries})"
+                response = await client.post(
+                    f"{OPENROUTER_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "HTTP-Referer": "https://github.com/anthropic/claude-code", # Requis par OpenRouter
+                        "X-Title": "Jobs Scraper"
+                    },
+                    json={
+                        "model": OPENROUTER_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 6000,
+                        "temperature": 0.7
+                    },
+                    timeout=60.0
                 )
-                if attempt < max_retries - 1:
-                    sleep_time = 10 * (attempt + 1)
-                    logger.info(f"Pause de {sleep_time}s avant retry...")
-                    time.sleep(sleep_time)
-                    continue
-                else:
-                    logger.error("Réponse vide après tous les retries")
-                    return None
-            response_text = content.strip()
+                response.raise_for_status()
+                data = response.json()
 
-            # Parser la réponse
+            content = data['choices'][0]['message']['content']
+            if not content or content.strip() == "":
+                logger.warning(f"Réponse vide reçue de l'API (tentative {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(10 * (attempt + 1))
+                    continue
+                return None
+
+            response_text = content.strip()
             result = _parse_ai_response(response_text)
             if result:
                 logger.info(f"Offre scorée : score={result['ai_score']}, reco={result['ai_recommendation'][:30]}...")
                 return result
-            else:
-                logger.debug(f"Réponse complète ({len(response_text)} chars) : {response_text}")
-                logger.warning("Réponse reçue mais impossible à parser")
-                return None
 
-        except Exception as e:
+            logger.warning("Réponse reçue mais impossible à parser")
+            return None
+
+        except httpx.HTTPStatusError as e:
             error_msg = str(e)
-            logger.warning(f"Erreur OpenRouter (tentative {attempt + 1}/{max_retries}) : {error_msg}")
-
-            # Gestion des retry selon le code d'erreur
-            if "429" in error_msg or "rate limit" in error_msg.lower():
+            logger.warning(f"Erreur HTTP OpenRouter (tentative {attempt + 1}/{max_retries}) : {error_msg}")
+            if e.response.status_code == 429:
                 if attempt < max_retries - 1:
-                    sleep_time = 10 * (attempt + 1)
-                    logger.info(f"Rate limit détecté, pause de {sleep_time}s avant retry...")
-                    time.sleep(sleep_time)
+                    await asyncio.sleep(10 * (attempt + 1))
                     continue
-            elif "500" in error_msg or "503" in error_msg:
+            elif e.response.status_code >= 500:
                 if attempt < max_retries - 1:
-                    sleep_time = 2
-                    logger.info(f"Erreur serveur {error_msg}, pause de {sleep_time}s avant retry...")
-                    time.sleep(sleep_time)
+                    await asyncio.sleep(2)
                     continue
-
             if attempt == max_retries - 1:
-                logger.error(f"Échec définitif après {max_retries} tentatives : {error_msg}")
                 return None
+        except Exception as e:
+            logger.error(f"Erreur inattendue OpenRouter (tentative {attempt + 1}/{max_retries}) : {e}")
+            if attempt == max_retries - 1:
+                return None
+            await asyncio.sleep(2)
 
     return None
 
 
-def score_pending_jobs(db_manager, limit: int = 20) -> int:
+async def _score_pending_jobs_async(db_manager, limit: int):
     """
-    Score les offres en attente (ai_score IS NULL) dans la base de données.
-
-    Args:
-        db_manager: Instance de DatabaseManager
-        limit: Nombre maximum d'offres à scorer (default: 20)
-
-    Returns:
-        int: Nombre d'offres scorées avec succès
+    Version asynchrone du scoring des offres en attente.
     """
     logger.info(f"Récupération de jusqu'à {limit} offres à scorer...")
 
     try:
-        # Récupérer les offres à scorer
+        # Récupérer les offres à scorer (synchrone)
         query = """
             SELECT title, url, company, location, employment_type, remote_work,
                    salary, description, date_posted, source
@@ -295,63 +262,25 @@ def score_pending_jobs(db_manager, limit: int = 20) -> int:
 
         logger.info(f"{len(rows)} offres à scorer")
 
-        # Convertir en dictionnaires
         jobs_to_score = []
         for row in rows:
-            job_dict = {
-                'title': row[0],
-                'url': row[1],
-                'company': row[2],
-                'location': row[3],
-                'employment_type': row[4],
-                'remote_work': row[5],
-                'salary': row[6],
-                'description': row[7],
-                'date_posted': row[8],
-                'source': row[9],
-            }
-            jobs_to_score.append(job_dict)
+            jobs_to_score.append({
+                'title': row[0], 'url': row[1], 'company': row[2], 'location': row[3],
+                'employment_type': row[4], 'remote_work': row[5], 'salary': row[6],
+                'description': row[7], 'date_posted': row[8], 'source': row[9],
+            })
 
-        # Scorer chaque offre
         scored_count = 0
-        for idx, job in enumerate(jobs_to_score, 1):
-            logger.info(f"[{idx}/{len(jobs_to_score)}] Scoring : {job['title'][:50]}...")
+        semaphore = asyncio.Semaphore(3)
+        db_lock = asyncio.Lock()
 
-            result = score_job_offer(job)
+        async with httpx.AsyncClient() as client:
+            tasks = []
+            for job in jobs_to_score:
+                tasks.append(_process_job_async(client, semaphore, db_lock, db_manager, job))
 
-            if result:
-                # Mettre à jour la base de données
-                try:
-                    update_query = """
-                        UPDATE job_offers
-                        SET ai_score = %s,
-                            ai_recommendation = %s,
-                            ai_analysis = %s,
-                            scored_at = NOW()
-                        WHERE url = %s;
-                    """
-                    db_manager.cursor.execute(
-                        update_query,
-                        (
-                            result['ai_score'],
-                            result['ai_recommendation'],
-                            result['ai_analysis'],
-                            job['url']
-                        )
-                    )
-                    db_manager.conn.commit()
-                    scored_count += 1
-                    logger.info(f"  ✓ Score enregistré : {result['ai_score']}/10")
-                except Exception as e:
-                    logger.error(f"  ✗ Erreur lors de la mise à jour DB : {e}")
-                    db_manager.conn.rollback()
-            else:
-                logger.warning(f"  ✗ Échec du scoring pour cette offre")
-
-            # Pause pour respecter rate limit (modèle gratuit)
-            if idx < len(jobs_to_score):
-                logger.debug("Pause de 2s avant la prochaine offre...")
-                time.sleep(2)
+            results = await asyncio.gather(*tasks)
+            scored_count = sum(1 for r in results if r)
 
         logger.info(f"Scoring terminé : {scored_count}/{len(jobs_to_score)} offres scorées avec succès")
         return scored_count
@@ -359,3 +288,41 @@ def score_pending_jobs(db_manager, limit: int = 20) -> int:
     except Exception as e:
         logger.error(f"Erreur lors du scoring des offres : {e}")
         return 0
+
+async def _process_job_async(client, semaphore, db_lock, db_manager, job):
+    """
+    Gère le cycle complet : scoring IA + écriture DB sérialisée.
+    """
+    result = await _score_job_offer_async(client, semaphore, job)
+
+    if result:
+        async with db_lock:
+            try:
+                update_query = """
+                    UPDATE job_offers
+                    SET ai_score = %s,
+                        ai_recommendation = %s,
+                        ai_analysis = %s,
+                        scored_at = NOW()
+                    WHERE url = %s;
+                """
+                db_manager.cursor.execute(
+                    update_query,
+                    (result['ai_score'], result['ai_recommendation'], result['ai_analysis'], job['url'])
+                )
+                db_manager.conn.commit()
+                logger.info(f"  ✓ Score enregistré : {result['ai_score']}/10 pour {job['url']}")
+                return True
+            except Exception as e:
+                logger.error(f"  ✗ Erreur lors de la mise à jour DB : {e}")
+                db_manager.conn.rollback()
+    else:
+        logger.warning(f"  ✗ Échec du scoring pour {job['url']}")
+
+    return False
+
+def score_pending_jobs(db_manager, limit: int = 20) -> int:
+    """
+    Score les offres en attente (ai_score IS NULL) dans la base de données.
+    """
+    return asyncio.run(_score_pending_jobs_async(db_manager, limit))
