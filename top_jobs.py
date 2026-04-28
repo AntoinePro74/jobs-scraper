@@ -12,6 +12,7 @@ def get_top_jobs(limit: int) -> list[dict]:
         WHERE ai_score IS NOT NULL
             AND applied IS FALSE
             AND is_active IS TRUE
+            AND ignored IS FALSE
         ORDER BY ai_score DESC
         LIMIT %s
     """, (limit,))

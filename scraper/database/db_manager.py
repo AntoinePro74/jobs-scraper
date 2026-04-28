@@ -286,6 +286,31 @@ class DatabaseManager:
             logger.error(f"Failed to mark offer as applied: {e}")
             return False
 
+    def mark_ignored(self, identifier, is_id: bool) -> tuple[bool, str]:
+        """Mark an offer as ignored. Returns (success, title)."""
+        try:
+            if is_id:
+                self.cursor.execute(
+                    "UPDATE job_offers SET ignored = TRUE WHERE id = %s RETURNING title;",
+                    (identifier,)
+                )
+            else:
+                self.cursor.execute(
+                    "UPDATE job_offers SET ignored = TRUE WHERE url = %s RETURNING title;",
+                    (identifier,)
+                )
+            row = self.cursor.fetchone()
+            if row:
+                self.conn.commit()
+                return True, row[0]
+            else:
+                self.conn.rollback()
+                return False, ""
+        except psycopg2.Error as e:
+            self.conn.rollback()
+            logger.error(f"Failed to mark offer as ignored: {e}")
+            return False, ""
+
     def update_last_seen(self, urls: List[str]) -> int:
         """
         Update last_seen_at to NOW() for all given URLs.

@@ -237,6 +237,10 @@ python manage_jobs.py list --applied
 # Marquer une candidature
 python manage_jobs.py apply "https://www.apec.fr/candidat/recherche-emploi.html/emploi/detail-offre/178350363W"
 
+# Ignorer une offre (ne plus l'afficher dans le top)
+python manage_jobs.py ignore --url "https://www.example.com/job"
+python manage_jobs.py ignore --id 123
+
 # Statistiques globales
 python manage_jobs.py stats
 

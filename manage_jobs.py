@@ -300,6 +300,17 @@ def show_stats(db: DatabaseManager):
         logger.error(f"Error showing stats: {e}")
 
 
+def ignore_offer(db: DatabaseManager, identifier: str, is_id: bool):
+    """Mark an offer as ignored."""
+    try:
+        success, title = db.mark_ignored(identifier, is_id)
+        if success:
+            print(f"\n✓ Offer marked as ignored: {title}\n")
+        else:
+            print(f"\n✗ Offer not found: {identifier}\n")
+    except Exception as e:
+        logger.error(f"Error ignoring offer: {e}")
+
 def main():
     parser = argparse.ArgumentParser(description="Manage job offers database")
 
@@ -321,6 +332,12 @@ def main():
     # apply command
     apply_parser = subparsers.add_parser("apply", help="Mark an offer as applied")
     apply_parser.add_argument("url", help="URL of the offer to mark as applied")
+
+    # ignore command
+    ignore_parser = subparsers.add_parser("ignore", help="Mark an offer as ignored")
+    ignore_group = ignore_parser.add_mutually_exclusive_group(required=True)
+    ignore_group.add_argument("--id", type=int, help="ID of the offer to ignore")
+    ignore_group.add_argument("--url", type=str, help="URL of the offer to ignore")
 
     # stats command
     subparsers.add_parser("stats", help="Show database statistics")
@@ -361,6 +378,11 @@ def main():
 
         elif args.command == "apply":
             apply_offer(db, args.url)
+
+        elif args.command == "ignore":
+            identifier = args.id if args.id is not None else args.url
+            is_id = args.id is not None
+            ignore_offer(db, identifier, is_id)
 
         elif args.command == "stats":
             show_stats(db)
