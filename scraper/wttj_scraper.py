@@ -2,276 +2,229 @@
 # -*- coding: utf-8 -*-
 
 """
-Scraper pour le site Welcome To The Jungle.
-
-Hérite de BaseScraper et implémente les méthodes spécifiques à WTTJ
-pour la pagination et l'extraction des offres.
+Scraper pour le site Welcome To The Jungle utilisant l'API Algolia.
 """
 
-import re
-import time
 import logging
+import requests
+import re
+from urllib.parse import urlparse, parse_qs
 from typing import List, Dict, Optional
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-from bs4 import BeautifulSoup
-
-from scraper.models.job_offer import JobOffer
+from scraper.models.job_offer import JobOffer, EmploymentType, RemoteWorkType
 from scraper.parsers.wttj_job_details_parser import WTTJJobDetailsParser
 from .base_scraper import BaseScraper
 
-
 class WttjScraper(BaseScraper):
     """
-    Scraper Welcome To The Jungle héritant de BaseScraper.
-
-    Implémente les méthodes spécifiques à WTTJ pour la pagination
-    et l'extraction des offres.
+    Scraper Welcome To The Jungle basé sur l'API Algolia.
     """
 
     def __init__(self, headless: bool = True):
-        """
-        Initialise le scraper WTTJ.
-
-        Args:
-            headless (bool): Si True, exécute Chrome en mode headless
-        """
         super().__init__(
             source_name="wttj",
             base_url="https://www.welcometothejungle.com",
             headless=headless
         )
+        self.algolia_app_id = "CSEKHVMS53"
+        self.algolia_api_key = "4bd8f6215d0cc52b26430765769e65a0"
+        self.algolia_index = "wttj_jobs_production_fr"
+        self._init_algolia_credentials()
 
-    def _build_page_url(self, base_url: str, page: int) -> str:
+    def _init_algolia_credentials(self):
+        """Récupère les clés Algolia dynamiquement depuis /api/env."""
+        try:
+            response = requests.get(f"{self.base_url}/api/env", timeout=10)
+            if response.status_code == 200:
+                text = response.text
+                app_id = re.search(r'PUBLIC_ALGOLIA_APPLICATION_ID["\s:]+([A-Z0-9]+)', text)
+                api_key = re.search(r'PUBLIC_ALGOLIA_API_KEY_CLIENT["\s:]+([a-f0-9]+)', text)
+
+                if app_id:
+                    self.algolia_app_id = app_id.group(1)
+                if api_key:
+                    self.algolia_api_key = api_key.group(1)
+
+                if app_id or api_key:
+                    self.logger.info("Identifiants Algolia mis à jour dynamiquement via regex")
+        except Exception as e:
+            self.logger.warning(f"Impossible de récupérer les clés Algolia dynamiquement, utilisation des fallbacks: {e}")
+
+    def _parse_wttj_url_to_algolia(self, search_url: str) -> Dict:
         """
-        Construit l'URL d'une page spécifique.
-
-        Pour WTTJ : le paramètre est "page=N".
-        Si "page=" existe déjà dans l'URL, le remplacer.
-        Sinon, ajouter "&page=N" ou "?page=N" selon présence de "?".
-
-        Args:
-            base_url: URL de base de recherche
-            page: Numéro de page (1-indexé)
-
-        Returns:
-            URL complète de la page
+        Convertit une URL de recherche WTTJ en paramètres de requête Algolia.
+        Exemple: https://www.welcometothejungle.com/fr/jobs?query="Account Manager"
         """
-        # Si l'URL contient déjà un paramètre page=, le remplacer
-        if re.search(r'[?&]page=\d+', base_url):
-            return re.sub(r'([?&]page=)\d+', f'\\g<1>{page}', base_url)
-        # Sinon, ajouter le paramètre
-        separator = '&' if '?' in base_url else '?'
-        return f"{base_url}{separator}page={page}"
+        parsed_url = urlparse(search_url)
+        params = parse_qs(parsed_url.query)
+
+        algolia_params = {
+            "query": params.get("query", [""])[0].strip('"'),
+            "filters": "",
+            "page": 0
+        }
+
+        filters = []
+
+        # Mapping des filtres URL -> Algolia
+        # contract_type: refinementList[contract_type][]
+        contract_types = params.get("refinementList[contract_type][]", [])
+        if contract_types:
+            # Algolia syntax: contract_type:"full_time"
+            filters.append(f'contract_type:{" OR ".join([f"\"{ct}\"" for ct in contract_types])}')
+
+        # country_code: refinementList[offices.country_code][]
+        country_codes = params.get("refinementList[offices.country_code][]", [])
+        if country_codes:
+            filters.append(f'offices.country_code:{" OR ".join([f"\"{cc}\"" for cc in country_codes])}')
+
+        # remote: refinementList[remote][]
+        remotes = params.get("refinementList[remote][]", [])
+        if remotes:
+            filters.append(f'remote:{" OR ".join([f"\"{r}\"" for r in remotes])}')
+
+        if filters:
+            algolia_params["filters"] = " AND ".join(filters)
+
+        return algolia_params
 
     def _get_total_pages(self, search_url: str) -> int:
         """
-        Récupère le nombre total de pages de résultats.
-
-        Sur WTTJ, le total est dans un élément avec data-testid="jobs-search-results-count".
-        Attends que cet élément soit présent, extrait le nombre, et calcule le nb de pages.
-
-        Args:
-            search_url (str): URL de recherche WTTJ
-
-        Returns:
-            int: Nombre total de pages (minimum 1)
+        Détermine le nombre total de pages via l'API Algolia.
+        Note: Cette méthode est appelée par BaseScraper.
         """
         try:
-            self._setup_driver()
-            self.driver.get(search_url)
-
-            # Attendre l'élément contenant le total (timeout 10s)
-            try:
-                wait = WebDriverWait(self.driver, 10)
-                element = wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-testid='jobs-search-results-count']"))
-                )
-                total_text = element.text.strip()
-            except TimeoutException:
-                self.logger.warning("Impossible de détecter le total (élément non trouvé), retour à 1 page")
-                return 1
-
-            # Supprimer les espaces (séparateurs de milliers) et convertir en int
-            total_clean = total_text.replace(' ', '')
-            try:
-                total = int(total_clean)
-                total_pages = (total + 29) // 30  # ceil division
-                self.logger.info(f"Total offres détectées : {total}, soit {total_pages} pages")
-                return max(1, total_pages)
-            except ValueError:
-                self.logger.warning(f"Valeur totale invalide: '{total_text}' (nettoyé: '{total_clean}'), retour à 1 page")
-                return 1
-
+            algolia_params = self._parse_wttj_url_to_algolia(search_url)
+            results = self._call_algolia_api(algolia_params)
+            return results.get("nbPages", 1)
         except Exception as e:
-            self.logger.warning(f"Erreur lors de la détection du nombre de pages: {e}")
+            self.logger.error(f"Erreur lors de la récupération du nombre de pages: {e}")
             return 1
+
+    def _build_page_url(self, base_url: str, page: int) -> str:
+        """
+        Non utilisé directement par l'API Algolia, mais requis par BaseScraper.
+        On retourne l'URL originale car la pagination est gérée dans Algolia params.
+        """
+        return base_url
+
+    def _call_algolia_api(self, params: Dict) -> Dict:
+        """Effectue l'appel POST vers l'API Algolia."""
+        endpoint = f"https://{self.algolia_app_id}-dsn.algolia.net/1/indexes/{self.algolia_index}/query"
+
+        headers = {
+            "X-Algolia-Application-Id": self.algolia_app_id,
+            "X-Algolia-API-Key": self.algolia_api_key,
+            "Content-Type": "application/json",
+            "Referer": "https://www.welcometothejungle.com/",
+            "Origin": "https://www.welcometothejungle.com"
+        }
+
+        response = requests.post(endpoint, json=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
 
     def scrape_search_results(self, search_url: str, max_pages: Optional[int] = None) -> List[Dict]:
         """
-        Scrape les offres d'emploi à partir d'une URL de recherche WTTJ.
-
-        Gère la pagination, attend le chargement des résultats,
-        et extrait titre + URL de chaque offre.
-
-        Args:
-            search_url (str): URL de recherche WTTJ
-            max_pages (Optional[int]): Nombre maximum de pages à scraper
-
-        Returns:
-            List[Dict]: Liste des offres avec au moins 'title' et 'url'
+        Scrape les offres via l'API Algolia.
         """
-        self.logger.info(f"Scraping des offres depuis l'URL: {search_url}")
+        self.logger.info(f"Scraping WTTJ via Algolia API: {search_url}")
 
-        # Détecter le nombre total de pages
-        total_pages = self._get_total_pages(search_url)
+        algolia_params = self._parse_wttj_url_to_algolia(search_url)
 
-        # Limiter si max_pages est spécifié
+        # Obtenir le total des pages
+        try:
+            # On fait un premier appel pour avoir nbPages
+            initial_res = self._call_algolia_api(algolia_params)
+            total_pages = initial_res.get("nbPages", 1)
+        except Exception as e:
+            self.logger.error(f"Erreur appel initial Algolia: {e}")
+            return []
+
         if max_pages is not None:
             total_pages = min(total_pages, max_pages)
-            self.logger.info(f"Limitation à {max_pages} pages sur {total_pages} détectées")
+
+        self.logger.info(f"Total pages détectées: {total_pages}")
 
         all_jobs = []
 
-        for page in range(1, total_pages + 1):
-            self.logger.info(f"=== Page {page}/{total_pages} ===")
+        # Algolia pages start at 0
+        for page in range(total_pages):
+            self.logger.info(f"=== Page {page + 1}/{total_pages} ===")
+            algolia_params["page"] = page
 
             try:
-                # Configurer le driver si nécessaire
-                self._setup_driver()
+                res = self._call_algolia_api(algolia_params)
+                hits = res.get("hits", [])
 
-                # Construire l'URL de la page courante
-                page_url = self._build_page_url(search_url, page)
-                self.driver.get(page_url)
+                for hit in hits:
+                    # Construction de l'URL de l'offre
+                    # La structure réelle du hit est hit["organization"]["slug"] et hit["slug"]
+                    company_slug = hit.get("organization", {}).get("slug")
+                    job_slug = hit.get("slug")
 
-                # Attendre le chargement des résultats
-                wait = WebDriverWait(self.driver, 20)
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "ul[data-testid='search-results']")))
+                    if company_slug and job_slug:
+                        full_url = f"{self.base_url}/fr/companies/{company_slug}/jobs/{job_slug}"
+                    else:
+                        full_url = None
 
-                # Attendre un peu supplémentaire pour que le JavaScript se charge
-                time.sleep(3)
+                    if full_url:
+                        all_jobs.append({
+                            "title": hit.get("name", "Titre inconnu"),
+                            "url": full_url
+                        })
 
-                # Parser avec BeautifulSoup
-                html = self.driver.page_source
-                soup = BeautifulSoup(html, 'lxml')
-
-                # Trouver la liste des résultats
-                results_ul = soup.find('ul', {'data-testid': 'search-results'})
-                if not results_ul:
-                    self.logger.warning(f"Pas de liste de résultats trouvée (ul[data-testid='search-results']) sur la page {page}")
-                    continue
-
-                # Itérer sur les <li>
-                list_items = results_ul.find_all('li')
-                self.logger.info(f"Trouvé {len(list_items)} éléments <li> dans les résultats")
-
-                for i, li in enumerate(list_items):
-                    try:
-                        # Chercher le lien vers l'offre : <a href=regex("/fr/companies/.*/jobs/")>
-                        link = li.find('a', href=re.compile(r'/fr/companies/.*/jobs/'))
-                        if not link:
-                            continue
-
-                        href = link.get('href')
-                        if not href:
-                            continue
-
-                        # Construire l'URL absolue
-                        if href.startswith('/'):
-                            full_url = f"{self.base_url}{href}"
-                        else:
-                            full_url = href
-
-                        # Extraire le titre : premier <h2> enfant direct du <li>
-                        title_h2 = li.find('h2')
-                        if title_h2:
-                            title = title_h2.get_text(strip=True)
-                        else:
-                            # Fallback sur aria-label du lien
-                            title = link.get('aria-label')
-                            if not title:
-                                title = "Titre inconnu"
-                            else:
-                                title = title.strip()
-
-                        if title and len(title) > 3 and full_url:
-                            all_jobs.append({
-                                'title': title,
-                                'url': full_url
-                            })
-                            self.logger.debug(f"Ajouté [{i}]: {title} - {full_url}")
-
-                    except Exception as e:
-                        self.logger.warning(f"Erreur lors de l'extraction d'une offre (page {page}, item {i}): {e}")
-                        continue
-
-                self.logger.info(f"Page {page} : {len(all_jobs)} offres collectées jusqu'à présent")
+                self.logger.info(f"Page {page + 1}: {len(hits)} offres collectées")
 
             except Exception as e:
                 self.logger.error(f"Erreur lors du scraping de la page {page}: {e}")
-                import traceback
-                traceback.print_exc()
                 continue
 
-        # Déduplication finale (une offre peut apparaître sur plusieurs pages)
-        seen_urls = set()
-        unique_jobs = []
-        for job in all_jobs:
-            if job['url'] not in seen_urls:
-                seen_urls.add(job['url'])
-                unique_jobs.append(job)
-
-        self.logger.info(f"{len(unique_jobs)} offres uniques extraites au total")
-        return unique_jobs
+        self.logger.info(f"{len(all_jobs)} offres extraites au total via Algolia")
+        return all_jobs
 
     def scrape_job_details(self, job_offers: List[Dict]) -> List[JobOffer]:
         """
-        Scrape les détails complets pour une liste d'offres WTTJ.
-
-        Utilise WTTJJobDetailsParser pour extraire les champs.
-        Crée un JobOffer minimal pour chaque offre, puis enrichit.
-
-        Args:
-            job_offers (List[Dict]): Liste des offres avec 'title' et 'url'
-
-        Returns:
-            List[JobOffer]: Liste des offres avec détails complets
+        Scrape les détails complets.
+        On utilise requests + BeautifulSoup au lieu de Selenium pour plus de rapidité.
         """
         self.logger.info(f"Scraping des détails pour {len(job_offers)} offres")
 
-        # Configurer le driver si nécessaire
-        self._setup_driver()
-
-        # Initialiser le parseur WTTJ
-        parser = WTTJJobDetailsParser(self.driver)
-
+        # On n'a plus besoin de driver Selenium pour WTTJ
         detailed_offers = []
+
+        # On instancie le parser qui doit maintenant accepter du HTML
+        parser = WTTJJobDetailsParser()
 
         for i, job_dict in enumerate(job_offers, 1):
             try:
                 self.logger.info(f"[{i}/{len(job_offers)}] Traitement: {job_dict['title']}")
 
-                # Créer un JobOffer initial (source="wttj" sera écrasée par le parser si déjà défini)
                 job_offer = JobOffer(
                     title=job_dict['title'],
                     url=job_dict['url'],
                     source="wttj"
                 )
 
-                # Parser les détails
-                detailed_offer = parser.parse_job_details(job_offer)
+                # Récupération du HTML via requests
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                  "Chrome/120.0.0.0 Safari/537.36",
+                    "Referer": "https://www.welcometothejungle.com/",
+                }
+                response = requests.get(job_offer.url, headers=headers, timeout=10)
+                response.raise_for_status()
+
+                # On passe le HTML au parser
+                detailed_offer = parser.parse_job_details(job_offer, response.text)
                 detailed_offers.append(detailed_offer)
 
-                # Pause entre les offres
-                if i < len(job_offers):
-                    time.sleep(2)
+                # Pause légère pour éviter le ban
+                import time
+                time.sleep(1)
 
             except Exception as e:
                 self.logger.error(f"Erreur lors du scraping des détails pour {job_dict['title']}: {e}")
-                # Ajouter l'offre minimale même en cas d'échec pour ne pas perdre la donnée
                 minimal_offer = JobOffer(
                     title=job_dict['title'],
                     url=job_dict['url'],
@@ -280,5 +233,8 @@ class WttjScraper(BaseScraper):
                 detailed_offers.append(minimal_offer)
                 continue
 
-        self.logger.info(f"{len(detailed_offers)} offres traitées avec leurs détails")
         return detailed_offers
+
+    def close(self):
+        """Nettoyage. On ne ferme rien car pas de driver Selenium."""
+        pass

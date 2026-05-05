@@ -37,6 +37,21 @@ def setup_logging():
     )
 
 
+def detect_site_from_url(url: str) -> str:
+    """Détecte le site d'emploi à partir de l'URL."""
+    if "welcometothejungle.com" in url:
+        return "wttj"
+    elif "hellowork.com" in url:
+        return "hellowork"
+    elif "apec.fr" in url:
+        return "apec"
+    elif "francetravail.fr" in url or "pole-emploi.fr" in url:
+        return "france_travail"
+    elif "jobup.ch" in url:
+        return "jobup"
+    return "hellowork"  # fallback
+
+
 def save_to_csv(job_offers: list, filename: str):
     """
     Sauvegarde les offres dans un fichier CSV.
@@ -145,7 +160,7 @@ def main():
     # Déterminer les URLs à scraper
     if args.urls:
         urls_to_scrape = args.urls
-        profiles_to_scrape = [{"label": url, "url": url, "site": "hellowork"} for url in urls_to_scrape]
+        profiles_to_scrape = [{"label": url, "url": url, "site": detect_site_from_url(url)} for url in urls_to_scrape]
     else:
         profiles_to_scrape = SEARCH_PROFILES
         urls_to_scrape = [p["url"] for p in profiles_to_scrape]
@@ -227,7 +242,11 @@ def main():
         db.update_last_seen(all_scraped_urls)
 
         # Mark offers as inactive if not seen in 7 days
-        inactive_count = db.mark_inactive_if_unseen(days=7)
+        if not args.urls:
+            inactive_count = db.mark_inactive_if_unseen(days=7)
+        else:
+            inactive_count = 0
+            logger.info("Run partiel (--urls) : vérification d'inactivité ignorée")
 
         # Export des données
         logger.info("\n" + "=" * 70)

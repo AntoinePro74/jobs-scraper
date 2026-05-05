@@ -30,34 +30,25 @@ class WTTJJobDetailsParser:
         logger: Logger spécifique au parseur
     """
 
-    def __init__(self, driver):
+    def __init__(self):
         """
         Initialise le parseur WTTJ.
-
-        Args:
-            driver: Instance Selenium WebDriver déjà configurée
         """
-        self.driver = driver
         self.logger = logging.getLogger(f"{__name__}.wttj_parser")
 
-    def parse_job_details(self, job_offer: JobOffer) -> JobOffer:
+    def parse_job_details(self, job_offer: JobOffer, html: str) -> JobOffer:
         """
-        Extrait tous les détails de l'offre depuis la page chargée.
+        Extrait tous les détails de l'offre depuis le contenu HTML fourni.
 
         Args:
             job_offer: Objet JobOffer avec au moins l'URL définie.
-                       Les autres champs (title) servent de fallback.
+            html: Contenu HTML de la page de l'offre.
 
         Returns:
             JobOffer enrichi avec tous les champs disponibles.
         """
         try:
-            # Charger la page
-            self.driver.get(job_offer.url)
-            time.sleep(3)  # Attendre le rendu React/JS
-
             # Parser le HTML
-            html = self.driver.page_source
             soup = BeautifulSoup(html, 'lxml')
 
             # Extraction séquentielle avec fallbacks
