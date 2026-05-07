@@ -154,9 +154,9 @@ async def _score_job_offer_async(client: httpx.AsyncClient, semaphore: asyncio.S
 
     # Formater le prompt
     description_value = _safe(job.get('description'), default="Aucune description fournie")
-    if len(description_value) > 5500:
-        logger.debug(f"Description tronquée : {len(description_value)} chars → 5500")
-        description_value = description_value[:5500] + "\n[...description tronquée pour limite tokens...]"
+    if len(description_value) > 15000:
+        logger.debug(f"Description tronquée : {len(description_value)} chars → 15000")
+        description_value = description_value[:15000] + "\n[...description tronquée pour limite tokens...]"
 
     prompt = SCORING_PROMPT_TEMPLATE.format(
         title=_safe(job.get('title')),
@@ -191,8 +191,8 @@ async def _score_job_offer_async(client: httpx.AsyncClient, semaphore: asyncio.S
                     json={
                         "model": OPENROUTER_MODEL,
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 6000,
-                        "temperature": 0.7
+                        "max_tokens": 1200,
+                        "temperature": 0.3
                     },
                     timeout=60.0
                 )
