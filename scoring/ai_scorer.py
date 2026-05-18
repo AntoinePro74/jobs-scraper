@@ -185,13 +185,13 @@ async def _score_job_offer_async(client: httpx.AsyncClient, semaphore: asyncio.S
                     f"{OPENROUTER_BASE_URL}/chat/completions",
                     headers={
                         "Authorization": f"Bearer {api_key}",
-                        "HTTP-Referer": "https://github.com/anthropic/claude-code", # Requis par OpenRouter
+                        "HTTP-Referer": "https://github.com/AntoinePro74/jobs-scraper", # Requis par OpenRouter
                         "X-Title": "Jobs Scraper"
                     },
                     json={
                         "model": OPENROUTER_MODEL,
                         "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 1200,
+                        "max_tokens": 4000,
                         "temperature": 0.3
                     },
                     timeout=60.0
@@ -238,22 +238,40 @@ async def _score_job_offer_async(client: httpx.AsyncClient, semaphore: asyncio.S
     return None
 
 
-async def _score_pending_jobs_async(db_manager, limit: int):
+async def _score_pending_jobs_async(db_manager, limit: Optional[int]):
     """
     Version asynchrone du scoring des offres en attente.
     """
-    logger.info(f"Récupération de jusqu'à {limit} offres à scorer...")
 
     try:
         # Récupérer les offres à scorer (synchrone)
-        query = """
-            SELECT title, url, company, location, employment_type, remote_work,
-                   salary, description, date_posted, source
-            FROM job_offers
-            WHERE ai_score IS NULL AND is_active = TRUE
-            LIMIT %s;
-        """
-        db_manager.cursor.execute(query, (limit,))
+        if limit is None:
+            logger.info("Récupération de toutes les offres à scorer...")
+            query = """
+                SELECT title, url, company, location, employment_type, remote_work,
+                    salary, description, date_posted, source
+                FROM job_offers
+                WHERE ai_score IS NULL
+                AND is_active = TRUE
+                AND description IS NOT NULL
+                AND TRIM(description) != ''
+                AND LENGTH(TRIM(description)) >= 50;
+            """
+            db_manager.cursor.execute(query)
+        else:
+            logger.info(f"Récupération de jusqu'à {limit} offres à scorer...")
+            query = """
+                SELECT title, url, company, location, employment_type, remote_work,
+                    salary, description, date_posted, source
+                FROM job_offers
+                WHERE ai_score IS NULL
+                AND is_active = TRUE
+                AND description IS NOT NULL
+                AND TRIM(description) != ''
+                AND LENGTH(TRIM(description)) >= 50
+                LIMIT %s;
+            """
+            db_manager.cursor.execute(query, (limit,))
         rows = db_manager.cursor.fetchall()
 
         if not rows:
